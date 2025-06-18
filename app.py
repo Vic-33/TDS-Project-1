@@ -608,7 +608,7 @@ async def query_knowledge_base(request: QueryRequest):
             
             # Find similar content
             logger.info("Finding similar content")
-            relevant_results = await find_similar_content(query_embedding, conn, question)
+            relevant_results = await find_similar_content(query_embedding, conn, request.question)
             
             if not relevant_results:
                 logger.info("No relevant results found")

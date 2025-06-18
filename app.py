@@ -183,7 +183,7 @@ async def get_embedding(text, max_retries=3):
             await asyncio.sleep(3 * retries)  # Wait before retry
 
 # Function to find similar content in the database with improved logic
-async def find_similar_content(query_embedding, conn):
+async def find_similar_content(query_embedding, conn, question):
     try:
         cursor = conn.cursor()
         results = []
@@ -608,7 +608,7 @@ async def query_knowledge_base(request: QueryRequest):
             
             # Find similar content
             logger.info("Finding similar content")
-            relevant_results = await find_similar_content(query_embedding, conn)
+            relevant_results = await find_similar_content(query_embedding, conn, question)
             
             if not relevant_results:
                 logger.info("No relevant results found")

@@ -405,7 +405,9 @@ async def generate_answer(question, relevant_results, max_retries=2):
             
             # Prepare improved prompt
             prompt = f"""Answer the following question based ONLY on the provided context. 
-            If you cannot answer the question based on the context, say "I don't have enough information to answer this question."
+            If you cannot answer the question based on the context, say "I don't have enough information to answer this question.
+            If the question involves multiple possible options (e.g., model choices, scores, interpretations), respond with the most probable or appropriate answer, and explain why it is preferred over the other.
+            Do not leave it vague or open-ended. Always favor clarity and decisiveness, even when describing uncertainty."
             
             Context:
             {context}

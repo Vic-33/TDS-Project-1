@@ -382,6 +382,7 @@ async def generate_answer(question, relevant_results, max_retries=2):
             If you cannot answer the question based on the context, say "I don't have enough information to answer this question.
             If the question involves multiple possible options (e.g., model choices, scores, interpretations),choose and respond with the most probable answer.
             DO NOT give vague or open-ended answer. Always favor clarity and decisiveness, even when describing uncertainty.
+            Do not change or correct any numbers or formatting from the context. For example, if the dashboard says "110", retain it exactly as-is — do not interpret it as "11/10".
             If a number or phrase looks like a formatting error (e.g., "110"), retain it exactly as it appears in the context, DO NOT CHANGE IT."
             
             Context:

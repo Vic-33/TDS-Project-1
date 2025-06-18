@@ -378,19 +378,27 @@ async def generate_answer(question, relevant_results, max_retries=2):
                 context += f"\n\n{source_type} (URL: {result['url']}):\n{result['content'][:1500]}"
             
             # Prepare improved prompt
-            prompt = f"""You're a Virtual TA, Answer the following question based ONLY on the provided context. 
-            If you cannot answer the question based on the context, say "I don't have enough information to answer this question.
-            If the question involves multiple possible options (e.g., model choices, scores, interpretations),choose and respond with the most probable answer.
-            DO NOT give vague or open-ended answer. Always favor clarity and decisiveness, even when describing uncertainty.
-            Do not change or correct any numbers or formatting from the context. For example, if the dashboard says "110", retain it exactly as-is — do not interpret it as "11/10".
-            If a number or phrase looks like a formatting error (e.g., "110"), retain it exactly as it appears in the context, DO NOT CHANGE IT."
+            prompt = f""" You are a Virtual TA. Answer the following question based ONLY on the provided context.
+            If the context does not contain enough information to answer the question, respond with:
+            "I don't have enough information to answer this question."
+            If the question involves multiple possible options (e.g., model choices, scores, interpretations), choose and respond with the most probable answer, and explain your choice.
+            ❗ Do not give vague or open-ended answers. Always favor clarity and decisiveness.
+            ❗ IMPORTANT: Do not correct formatting in numbers or words. For example, if the context says "110", keep it exactly as "110" — do not change it to "11/10" or anything else.
+            
+            ---
             
             Context:
             {context}
             
-            Question: {question}
+            ---
+            
+            Question:
+            {question}
+            
+            ---
             
             Return your response in this exact format:
+            
             1. A comprehensive yet concise answer
             2. A "Sources:" section that lists the URLs and relevant text snippets you used to answer
             

@@ -185,36 +185,75 @@ async def get_embedding(text, max_retries=3):
 # Function to find similar content in the database with improved logic
 async def find_similar_content(query_embedding, conn):
     try:
-        logger.info("Finding similar content in database")
         cursor = conn.cursor()
         results = []
-        
-        # Search discourse chunks
-        logger.info("Querying discourse chunks")
+        fallback_results = []
+
+        # 1. Try to find a post that contains the exact question
+        logger.info("Looking for exact match of question in discourse_chunks")
         cursor.execute("""
-        SELECT id, post_id, topic_id, topic_title, post_number, author, created_at, 
-               likes, chunk_index, content, url, embedding 
-        FROM discourse_chunks 
-        WHERE embedding IS NOT NULL
-        """)
-        
-        discourse_chunks = cursor.fetchall()
-        logger.info(f"Processing {len(discourse_chunks)} discourse chunks")
-        processed_count = 0
-        
-        for chunk in discourse_chunks:
-            try:
+            SELECT * FROM discourse_chunks
+            WHERE content LIKE ?
+        """, (f"%{question.strip()}%",))
+        match_post = cursor.fetchone()
+
+        if match_post:
+            logger.info(f"Found exact match in post_id {match_post['post_id']} (topic_id: {match_post['topic_id']})")
+            topic_id = match_post['topic_id']
+
+            # 2. Fetch all posts from same topic_id
+            cursor.execute("""
+                SELECT * FROM discourse_chunks
+                WHERE topic_id = ?
+            """, (topic_id,))
+            topic_posts = cursor.fetchall()
+
+            for post in topic_posts:
+                content = post["content"]
+                embedding = json.loads(post["embedding"]) if post["embedding"] else None
+                similarity = cosine_similarity(query_embedding, embedding) if embedding else 0
+
+                # 3. Boost score if author is TA
+                author = post["author"].lower()
+                is_ta = any(tag in author for tag in ["ta", "teaching assistant"])
+
+                score = similarity + (0.3 if is_ta else 0.0)
+
+                url = post["url"]
+                if not url.startswith("http"):
+                    url = f"https://discourse.onlinedegree.iitm.ac.in/t/{url}"
+
+                results.append({
+                    "source": "discourse",
+                    "id": post["id"],
+                    "post_id": post["post_id"],
+                    "topic_id": post["topic_id"],
+                    "title": post["topic_title"],
+                    "url": url,
+                    "content": content,
+                    "author": post["author"],
+                    "created_at": post["created_at"],
+                    "chunk_index": post["chunk_index"],
+                    "similarity": similarity,
+                    "score": score
+                })
+
+        else:
+            logger.info("No exact match found, using fallback similarity search")
+            # 4. Fallback to regular similarity search
+            cursor.execute("""
+                SELECT * FROM discourse_chunks
+                WHERE embedding IS NOT NULL
+            """)
+            for chunk in cursor.fetchall():
                 embedding = json.loads(chunk["embedding"])
                 similarity = cosine_similarity(query_embedding, embedding)
-                
                 if similarity >= SIMILARITY_THRESHOLD:
-                    # Ensure URL is properly formatted
                     url = chunk["url"]
                     if not url.startswith("http"):
-                        # Fix missing protocol
                         url = f"https://discourse.onlinedegree.iitm.ac.in/t/{url}"
-                    
-                    results.append({
+
+                    fallback_results.append({
                         "source": "discourse",
                         "id": chunk["id"],
                         "post_id": chunk["post_id"],
@@ -225,95 +264,30 @@ async def find_similar_content(query_embedding, conn):
                         "author": chunk["author"],
                         "created_at": chunk["created_at"],
                         "chunk_index": chunk["chunk_index"],
-                        "similarity": float(similarity)
+                        "similarity": similarity,
+                        "score": similarity
                     })
-                
-                processed_count += 1
-                if processed_count % 1000 == 0:
-                    logger.info(f"Processed {processed_count}/{len(discourse_chunks)} discourse chunks")
-                    
-            except Exception as e:
-                logger.error(f"Error processing discourse chunk {chunk['id']}: {e}")
-        
-        # Search markdown chunks
-        logger.info("Querying markdown chunks")
-        cursor.execute("""
-        SELECT id, doc_title, original_url, downloaded_at, chunk_index, content, embedding 
-        FROM markdown_chunks 
-        WHERE embedding IS NOT NULL
-        """)
-        
-        markdown_chunks = cursor.fetchall()
-        logger.info(f"Processing {len(markdown_chunks)} markdown chunks")
-        processed_count = 0
-        
-        for chunk in markdown_chunks:
-            try:
-                embedding = json.loads(chunk["embedding"])
-                similarity = cosine_similarity(query_embedding, embedding)
-                
-                if similarity >= SIMILARITY_THRESHOLD:
-                    # Ensure URL is properly formatted
-                    url = chunk["original_url"]
-                    if not url or not url.startswith("http"):
-                        # Use a default URL if missing
-                        url = f"https://docs.onlinedegree.iitm.ac.in/{chunk['doc_title']}"
-                    
-                    results.append({
-                        "source": "markdown",
-                        "id": chunk["id"],
-                        "title": chunk["doc_title"],
-                        "url": url,
-                        "content": chunk["content"],
-                        "chunk_index": chunk["chunk_index"],
-                        "similarity": float(similarity)
-                    })
-                
-                processed_count += 1
-                if processed_count % 1000 == 0:
-                    logger.info(f"Processed {processed_count}/{len(markdown_chunks)} markdown chunks")
-                    
-            except Exception as e:
-                logger.error(f"Error processing markdown chunk {chunk['id']}: {e}")
-        
-        # Sort by similarity (descending)
-        results.sort(key=lambda x: x["similarity"], reverse=True)
-        logger.info(f"Found {len(results)} relevant results above threshold")
-        
-        # Group by source document and keep most relevant chunks
-        grouped_results = {}
-        
-        for result in results:
-            # Create a unique key for the document/post
-            if result["source"] == "discourse":
-                key = f"discourse_{result['post_id']}"
-            else:
-                key = f"markdown_{result['title']}"
-            
-            if key not in grouped_results:
-                grouped_results[key] = []
-            
-            grouped_results[key].append(result)
-        
-        # For each source, keep only the most relevant chunks
-        final_results = []
-        for key, chunks in grouped_results.items():
-            # Sort chunks by similarity
-            chunks.sort(key=lambda x: x["similarity"], reverse=True)
-            # Keep top chunks
-            final_results.extend(chunks[:MAX_CONTEXT_CHUNKS])
-        
-        # Sort again by similarity
-        final_results.sort(key=lambda x: x["similarity"], reverse=True)
-        
-        # Return top results, limited by MAX_RESULTS
-        logger.info(f"Returning {len(final_results[:MAX_RESULTS])} final results after grouping")
-        return final_results[:MAX_RESULTS]
+
+            results = fallback_results
+
+        # Final sort
+        results.sort(key=lambda x: x["score"], reverse=True)
+        grouped = {}
+        for res in results:
+            key = f"{res['source']}_{res.get('post_id') or res.get('title')}"
+            grouped.setdefault(key, []).append(res)
+
+        final = []
+        for group in grouped.values():
+            final.extend(group[:MAX_CONTEXT_CHUNKS])
+
+        return final[:MAX_RESULTS]
+
     except Exception as e:
-        error_msg = f"Error in find_similar_content: {e}"
-        logger.error(error_msg)
+        logger.error(f"Error in find_similar_content: {e}")
         logger.error(traceback.format_exc())
         raise
+
 
 # Function to enrich content with adjacent chunks
 async def enrich_with_adjacent_chunks(conn, results):
@@ -404,10 +378,11 @@ async def generate_answer(question, relevant_results, max_retries=2):
                 context += f"\n\n{source_type} (URL: {result['url']}):\n{result['content'][:1500]}"
             
             # Prepare improved prompt
-            prompt = f"""Answer the following question based ONLY on the provided context. 
+            prompt = f"""You're a Virtual TA, Answer the following question based ONLY on the provided context. 
             If you cannot answer the question based on the context, say "I don't have enough information to answer this question.
-            If the question involves multiple possible options (e.g., model choices, scores, interpretations), respond with the most probable or appropriate answer, and explain why it is preferred over the other.
-            Do not leave it vague or open-ended. Always favor clarity and decisiveness, even when describing uncertainty."
+            If the question involves multiple possible options (e.g., model choices, scores, interpretations),choose and respond with the most probable answer.
+            DO NOT give vague or open-ended answer. Always favor clarity and decisiveness, even when describing uncertainty.
+            If a number or phrase looks like a formatting error (e.g., "110"), retain it exactly as it appears in the context, DO NOT CHANGE IT."
             
             Context:
             {context}
